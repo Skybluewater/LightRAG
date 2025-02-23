@@ -57,9 +57,11 @@ ignore_this.txt
 
 # Project-specific files
 dickens/
+codetoon/
 book.txt
 lightrag-dev/
 gui/
+*.pdf
 
 # unit-test files
 test_*

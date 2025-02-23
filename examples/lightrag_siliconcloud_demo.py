@@ -6,7 +6,7 @@ from lightrag.llm.siliconcloud import siliconcloud_embedding
 from lightrag.utils import EmbeddingFunc
 import numpy as np
 
-WORKING_DIR = "./dickens"
+WORKING_DIR = "./codetoon"
 
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
@@ -55,26 +55,50 @@ rag = LightRAG(
     ),
 )
 
+import fitz  # PyMuPDF
 
-with open("./book.txt") as f:
-    rag.insert(f.read())
+def extract_text_from_pdf(file_path):
+    # Open the PDF file
+    pdf_document = fitz.open(file_path)
+    
+    # Initialize an empty string to store the extracted text
+    text = ""
+    
+    # Iterate over each page in the PDF
+    for page_num in range(len(pdf_document)):
+        # Get the page
+        page = pdf_document.load_page(page_num)
+        
+        # Extract text from the page
+        text += page.get_text()
+    
+    return text
+
+# Example usage
+file_path = 'TEXT.pdf'
+text_content = extract_text_from_pdf(file_path)
+
+rag.insert(text_content)
+
+# with open("./book.txt", encoding="utf-8") as f:
+#     rag.insert(f.read())
 
 # Perform naive search
 print(
-    rag.query("What are the top themes in this story?", param=QueryParam(mode="naive"))
+    rag.query("How does codetoon work?", param=QueryParam(mode="naive"))
 )
 
 # Perform local search
 print(
-    rag.query("What are the top themes in this story?", param=QueryParam(mode="local"))
+    rag.query("How does codetoon work?", param=QueryParam(mode="local"))
 )
 
 # Perform global search
 print(
-    rag.query("What are the top themes in this story?", param=QueryParam(mode="global"))
+    rag.query("How does codetoon work?", param=QueryParam(mode="global"))
 )
 
 # Perform hybrid search
 print(
-    rag.query("What are the top themes in this story?", param=QueryParam(mode="hybrid"))
+    rag.query("How does codetoon work?", param=QueryParam(mode="hybrid"))
 )
