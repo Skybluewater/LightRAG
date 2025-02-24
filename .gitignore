@@ -62,6 +62,7 @@ book.txt
 lightrag-dev/
 gui/
 *.pdf
+*.json
 
 # unit-test files
 test_*
