@@ -28,6 +28,8 @@ from .base import (
 from .namespace import NameSpace, make_namespace
 from .operate import (
     chunking_by_token_size,
+    chunking_by_late_chunk,
+    chunking_by_semantic_chunk,
     extract_entities,
     extract_keywords_only,
     kg_query,
@@ -121,6 +123,17 @@ class LightRAG:
 
     """Maximum number of tokens used for summarizing extracted entities."""
 
+    # chunking_func: Callable[
+    #     [
+    #         str,
+    #         str | None,
+    #         bool,
+    #         int,
+    #         int,
+    #         str,
+    #     ],
+    #     list[dict[str, Any]],
+    # ] = field(default_factory=lambda: chunking_by_token_size)
     chunking_func: Callable[
         [
             str,
@@ -131,7 +144,7 @@ class LightRAG:
             str,
         ],
         list[dict[str, Any]],
-    ] = field(default_factory=lambda: chunking_by_token_size)
+    ] = field(default=chunking_by_semantic_chunk)
     """
     Custom chunking function for splitting text into chunks before processing.
 

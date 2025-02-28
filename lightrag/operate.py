@@ -33,12 +33,70 @@ from .base import (
     TextChunkSchema,
     QueryParam,
 )
-from .prompt import GRAPH_FIELD_SEP, PROMPTS
+# from .prompt import GRAPH_FIELD_SEP, PROMPTS
+from .prompt_cn_paper import GRAPH_FIELD_SEP, PROMPTS
 import time
 from dotenv import load_dotenv
+from chonkie import LateChunker, SemanticChunker
 
 # Load environment variables
 load_dotenv(override=True)
+
+
+def chunking_by_late_chunk(
+    content: str,
+    split_by_character: str | None = None,
+    split_by_character_only: bool = False,
+    overlap_token_size: int = 128,
+    max_token_size: int = 1024,
+    tiktoken_model: str = "gpt-4o",
+) -> list[dict[str, Any]]:
+    late_chunker = LateChunker(
+        embedding_model="jinaai/jina-embeddings-v3",
+        mode = "sentence",
+        chunk_size=512,
+        min_sentences_per_chunk=1,
+        min_characters_per_sentence=12,
+        trust_remote_code=True
+    )
+    results: list[dict[str, Any]] = []
+    late_chunks = late_chunker(content)
+    for chunk in late_chunks:
+        results.append(
+            {
+                "tokens": chunk.token_count,
+                "content": chunk.text.strip(),
+                "chunk_order_index": chunk.chunk_order_index,
+            }
+        )
+    return results
+
+
+def chunking_by_semantic_chunk(
+    content: str,
+    split_by_character: str | None = None,
+    split_by_character_only: bool = False,
+    overlap_token_size: int = 128,
+    max_token_size: int = 1024,
+    tiktoken_model: str = "gpt-4o",
+) -> list[dict[str, Any]]:
+    from .llm.siliconcloud_embeddings import SiliconFlowEmbeddings
+    chunker_semantic = SemanticChunker(
+        embedding_model=SiliconFlowEmbeddings(),
+        threshold="auto",
+        chunk_size=512
+    )
+    semantic_chunks = chunker_semantic(content)
+    results: list[dict[str, Any]] = []
+    for chunk in semantic_chunks:
+        results.append(
+            {
+                "tokens": chunk.token_count,
+                "content": chunk.text.strip(),
+                "chunk_order_index": chunk.chunk_order_index,
+            }
+        )
+    return results
 
 
 def chunking_by_token_size(
