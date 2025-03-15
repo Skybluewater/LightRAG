@@ -58,6 +58,7 @@ ignore_this.txt
 # Project-specific files
 dickens/
 codetoon/
+DigitalPerformance/
 book.txt
 lightrag-dev/
 gui/

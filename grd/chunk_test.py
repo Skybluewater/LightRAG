@@ -3,6 +3,9 @@ from siliconflow_embeddings import SiliconFlowEmbeddings
 from chonkie import SentenceTransformerEmbeddings
 from sentence_transformers import SentenceTransformer
 
+# import os
+# os.environ["HF_HOME"] = "E:\\huggingface"
+
 model = SentenceTransformer("jinaai/jina-embeddings-v3", trust_remote_code=True)
 
 task = "retrieval.query"

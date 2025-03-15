@@ -7,33 +7,13 @@ from lightrag.utils import EmbeddingFunc
 import numpy as np
 import glob
 
-WORKING_DIR = "./ragtest"
+WORKING_DIR = "./rag"
 
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
 
 SILICONFLOW_API_KEY = os.getenv("SILICON_API_KEY")
 
-from openai import (
-    APIConnectionError,
-    RateLimitError,
-    APITimeoutError,
-)
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    retry=retry_if_exception_type(
-        (RateLimitError, APIConnectionError, APITimeoutError)
-    ),
-)
 async def llm_model_func(
     prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
 ) -> str:
@@ -48,13 +28,6 @@ async def llm_model_func(
     )
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    retry=retry_if_exception_type(
-        (RateLimitError, APIConnectionError, APITimeoutError)
-    ),
-)
 async def embedding_func(texts: list[str]) -> np.ndarray:
     return await siliconcloud_embedding(
         texts,
@@ -68,7 +41,7 @@ rag = LightRAG(
     working_dir=WORKING_DIR,
     llm_model_func=llm_model_func,
     embedding_func=EmbeddingFunc(
-        embedding_dim=1024, max_token_size=8192, func=embedding_func
+        embedding_dim=768, max_token_size=512, func=embedding_func
     ),
     graph_storage="Neo4JStorage",
     # log_level="DEBUG",

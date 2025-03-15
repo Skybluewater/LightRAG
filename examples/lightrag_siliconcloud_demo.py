@@ -7,7 +7,7 @@ from lightrag.utils import EmbeddingFunc
 import numpy as np
 import glob
 
-WORKING_DIR = "./DigitalPerformance"
+WORKING_DIR = "./DP"
 
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
@@ -31,7 +31,7 @@ async def llm_model_func(
 async def embedding_func(texts: list[str]) -> np.ndarray:
     return await siliconcloud_embedding(
         texts,
-        model="BAAI/bge-m3",
+        model="netease-youdao/bce-embedding-base_v1",
         api_key=SILICONFLOW_API_KEY,
         max_token_size=512,
     )

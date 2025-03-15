@@ -144,7 +144,7 @@ class LightRAG:
             str,
         ],
         list[dict[str, Any]],
-    ] = field(default=chunking_by_semantic_chunk)
+    ] = field(default=chunking_by_late_chunk)
     """
     Custom chunking function for splitting text into chunks before processing.
 

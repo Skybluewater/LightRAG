@@ -13,7 +13,48 @@ PROMPTS["DEFAULT_COMPLETION_DELIMITER"] = "<|COMPLETE|>"
 
 PROMPTS["DEFAULT_ENTITY_TYPES"] = ["research_field", "theory_model", "experimental_method", "dataset", "metric", "academic_org", "scholar", "venue", "research_problem", "dataset", "method", "resource", "case_study", "evaluation", "technology", "framework", "concept"]
 
+# PROMPTS["entity_extraction"] = """---Goal---
+# Given a text document that is potentially relevant to this activity and a list of entity types, identify all entities of those types from the text and all relationships among the identified entities.
+# Use {language} as output language.
+
+# ---Steps---
+# 1. Identify all entities. For each identified entity, extract the following information:
+# - entity_name: Name of the entity, use same language as input text. If English, capitalized the name.
+# - entity_type: One of the following types: [{entity_types}]
+# - entity_description: Comprehensive description of the entity's attributes and activities
+# Format each entity as ("entity"{tuple_delimiter}<entity_name>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>)
+
+# 2. From the entities identified in step 1, identify all pairs of (source_entity, target_entity) that are *clearly related* to each other.
+# For each pair of related entities, extract the following information:
+# - source_entity: name of the source entity, as identified in step 1
+# - target_entity: name of the target entity, as identified in step 1
+# - relationship_description: explanation as to why you think the source entity and the target entity are related to each other
+# - relationship_strength: a numeric score indicating strength of the relationship between the source entity and target entity
+# - relationship_keywords: one or more high-level key words that summarize the overarching nature of the relationship, focusing on concepts or themes rather than specific details
+# Format each relationship as ("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_keywords>{tuple_delimiter}<relationship_strength>)
+
+# 3. Identify high-level key words that summarize the main concepts, themes, or topics of the entire text. These should capture the overarching ideas present in the document.
+# Format the content-level key words as ("content_keywords"{tuple_delimiter}<high_level_keywords>)
+
+# 4. Return output in {language} as a single list of all the entities and relationships identified in steps 1 and 2. Use **{record_delimiter}** as the list delimiter.
+
+# 5. When finished, output {completion_delimiter}
+
+# ######################
+# ---Examples---
+# ######################
+# {examples}
+
+# #############################
+# ---Real Data---
+# ######################
+# Entity_types: {entity_types}
+# Text: {input_text}
+# ######################
+# Output:"""
+
 PROMPTS["entity_extraction"] = """---Goal---
+You are an expert in NLP tasks. Please perform precise entity recognition and relation extraction from academic texts (research papers, technical reports, conference proceedings) to construct domain-specific knowledge graphs.
 Given a text document that is potentially relevant to this activity and a list of entity types, identify all entities of those types from the text and all relationships among the identified entities.
 Use {language} as output language.
 
@@ -178,7 +219,7 @@ Output:
 
 PROMPTS[
     "summarize_entity_descriptions"
-] = """You are a helpful assistant responsible for generating a comprehensive summary of the data provided below.
+] = """You are a helpful academic assistant in NLP fields. Please generate a comprehensive summary of the data provided below.
 Given one or two entities, and a list of descriptions, all related to the same entity or group of entities.
 Please concatenate all of these into a single, comprehensive description. Make sure to include information collected from all the descriptions.
 If the provided descriptions are contradictory, please resolve the contradictions and provide a single, coherent summary.
@@ -239,7 +280,7 @@ When handling relationships with timestamps:
 
 PROMPTS["keywords_extraction"] = """---Role---
 
-You are a helpful assistant tasked with identifying both high-level and low-level keywords in the user's query and conversation history.
+You are a helpful academic assistant in NLP fields. Please identify both high-level and low-level keywords in the user's query and conversation history.
 
 ---Goal---
 
@@ -271,35 +312,69 @@ Output:
 
 """
 
+# PROMPTS["keywords_extraction_examples"] = [
+#     """Example 1:
+
+# Query: "How does international trade influence global economic stability?"
+# ################
+# Output:
+# {
+#   "high_level_keywords": ["International trade", "Global economic stability", "Economic impact"],
+#   "low_level_keywords": ["Trade agreements", "Tariffs", "Currency exchange", "Imports", "Exports"]
+# }
+# #############################""",
+#     """Example 2:
+
+# Query: "What are the environmental consequences of deforestation on biodiversity?"
+# ################
+# Output:
+# {
+#   "high_level_keywords": ["Environmental consequences", "Deforestation", "Biodiversity loss"],
+#   "low_level_keywords": ["Species extinction", "Habitat destruction", "Carbon emissions", "Rainforest", "Ecosystem"]
+# }
+# #############################""",
+#     """Example 3:
+
+# Query: "What is the role of education in reducing poverty?"
+# ################
+# Output:
+# {
+#   "high_level_keywords": ["Education", "Poverty reduction", "Socioeconomic development"],
+#   "low_level_keywords": ["School access", "Literacy rates", "Job training", "Income inequality"]
+# }
+# #############################""",
+# ]
+
+
 PROMPTS["keywords_extraction_examples"] = [
     """Example 1:
 
-Query: "How does international trade influence global economic stability?"
+Query: "国际贸易如何影响全球经济稳定?"
 ################
 Output:
 {
-  "high_level_keywords": ["International trade", "Global economic stability", "Economic impact"],
-  "low_level_keywords": ["Trade agreements", "Tariffs", "Currency exchange", "Imports", "Exports"]
+  "high_level_keywords": ["国际贸易", "全球经济稳定", "经济影响"],
+  "low_level_keywords": ["贸易协定", "关税", "货币兑换", "进口", "出口"]
 }
 #############################""",
     """Example 2:
 
-Query: "What are the environmental consequences of deforestation on biodiversity?"
+Query: "数字表演中的实时渲染技术面临哪些算力挑战?"
 ################
 Output:
 {
-  "high_level_keywords": ["Environmental consequences", "Deforestation", "Biodiversity loss"],
-  "low_level_keywords": ["Species extinction", "Habitat destruction", "Carbon emissions", "Rainforest", "Ecosystem"]
+"high_level_keywords": ["算力需求", "实时性保障", "能耗优化"],
+"low_level_keywords": ["光线追踪负载", "边缘计算节点", "渲染精度分级", "硬件散热限制", "云渲染延迟"]
 }
 #############################""",
     """Example 3:
 
-Query: "What is the role of education in reducing poverty?"
+Query: "人工智能生成内容在戏剧创作中的法律风险是什么?"
 ################
 Output:
 {
-  "high_level_keywords": ["Education", "Poverty reduction", "Socioeconomic development"],
-  "low_level_keywords": ["School access", "Literacy rates", "Job training", "Income inequality"]
+  "high_level_keywords": ["AI版权归属", "创作伦理", "法律空白"],
+  "low_level_keywords": ["训练数据溯源", "署名权界定", "改编权冲突", "算法偏见", "跨国司法差异"]
 }
 #############################""",
 ]
