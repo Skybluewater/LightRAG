@@ -15,7 +15,7 @@ from ..base import (
     DocStatusStorage,
 )
 from ..namespace import NameSpace, is_namespace
-from ..utils import logger
+from ..utils import logger, compute_mdhash_id
 from ..types import KnowledgeGraph, KnowledgeGraphNode, KnowledgeGraphEdge
 import pipmaster as pm
 
@@ -333,7 +333,7 @@ class MongoGraphStorage(BaseGraphStorage):
         Check if there's a direct single-hop edge from source_node_id to target_node_id.
 
         We'll do a $graphLookup with maxDepth=0 from the source node—meaning
-        “Look up zero expansions.” Actually, for a direct edge check, we can do maxDepth=1
+        "Look up zero expansions." Actually, for a direct edge check, we can do maxDepth=1
         and then see if the target node is in the "reachableNodes" at depth=0.
 
         But typically for a direct edge, we might just do a find_one.
@@ -795,6 +795,50 @@ class MongoGraphStorage(BaseGraphStorage):
         # Mongo handles persistence automatically
         pass
 
+    async def remove_nodes(self, nodes: list[str]) -> None:
+        """Delete multiple nodes
+
+        Args:
+            nodes: List of node IDs to be deleted
+        """
+        logger.info(f"Deleting {len(nodes)} nodes")
+        if not nodes:
+            return
+
+        # 1. Remove all edges referencing these nodes (remove from edges array of other nodes)
+        await self.collection.update_many(
+            {}, {"$pull": {"edges": {"target": {"$in": nodes}}}}
+        )
+
+        # 2. Delete the node documents
+        await self.collection.delete_many({"_id": {"$in": nodes}})
+
+        logger.debug(f"Successfully deleted nodes: {nodes}")
+
+    async def remove_edges(self, edges: list[tuple[str, str]]) -> None:
+        """Delete multiple edges
+
+        Args:
+            edges: List of edges to be deleted, each edge is a (source, target) tuple
+        """
+        logger.info(f"Deleting {len(edges)} edges")
+        if not edges:
+            return
+
+        update_tasks = []
+        for source, target in edges:
+            # Remove edge pointing to target from source node's edges array
+            update_tasks.append(
+                self.collection.update_one(
+                    {"_id": source}, {"$pull": {"edges": {"target": target}}}
+                )
+            )
+
+        if update_tasks:
+            await asyncio.gather(*update_tasks)
+
+        logger.debug(f"Successfully deleted edges: {edges}")
+
 
 @final
 @dataclass
@@ -894,7 +938,9 @@ class MongoVectorDBStorage(BaseVectorStorage):
 
         return list_data
 
-    async def query(self, query: str, top_k: int) -> list[dict[str, Any]]:
+    async def query(
+        self, query: str, top_k: int, ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Queries the vector database using Atlas Vector Search."""
         # Generate the embedding
         embedding = await self.embedding_func([query])
@@ -932,11 +978,153 @@ class MongoVectorDBStorage(BaseVectorStorage):
         # Mongo handles persistence automatically
         pass
 
+    async def delete(self, ids: list[str]) -> None:
+        """Delete vectors with specified IDs
+
+        Args:
+            ids: List of vector IDs to be deleted
+        """
+        logger.info(f"Deleting {len(ids)} vectors from {self.namespace}")
+        if not ids:
+            return
+
+        try:
+            result = await self._data.delete_many({"_id": {"$in": ids}})
+            logger.debug(
+                f"Successfully deleted {result.deleted_count} vectors from {self.namespace}"
+            )
+        except PyMongoError as e:
+            logger.error(
+                f"Error while deleting vectors from {self.namespace}: {str(e)}"
+            )
+
     async def delete_entity(self, entity_name: str) -> None:
-        raise NotImplementedError
+        """Delete an entity by its name
+
+        Args:
+            entity_name: Name of the entity to delete
+        """
+        try:
+            entity_id = compute_mdhash_id(entity_name, prefix="ent-")
+            logger.debug(
+                f"Attempting to delete entity {entity_name} with ID {entity_id}"
+            )
+
+            result = await self._data.delete_one({"_id": entity_id})
+            if result.deleted_count > 0:
+                logger.debug(f"Successfully deleted entity {entity_name}")
+            else:
+                logger.debug(f"Entity {entity_name} not found in storage")
+        except PyMongoError as e:
+            logger.error(f"Error deleting entity {entity_name}: {str(e)}")
 
     async def delete_entity_relation(self, entity_name: str) -> None:
-        raise NotImplementedError
+        """Delete all relations associated with an entity
+
+        Args:
+            entity_name: Name of the entity whose relations should be deleted
+        """
+        try:
+            # Find relations where entity appears as source or target
+            relations_cursor = self._data.find(
+                {"$or": [{"src_id": entity_name}, {"tgt_id": entity_name}]}
+            )
+            relations = await relations_cursor.to_list(length=None)
+
+            if not relations:
+                logger.debug(f"No relations found for entity {entity_name}")
+                return
+
+            # Extract IDs of relations to delete
+            relation_ids = [relation["_id"] for relation in relations]
+            logger.debug(
+                f"Found {len(relation_ids)} relations for entity {entity_name}"
+            )
+
+            # Delete the relations
+            result = await self._data.delete_many({"_id": {"$in": relation_ids}})
+            logger.debug(f"Deleted {result.deleted_count} relations for {entity_name}")
+        except PyMongoError as e:
+            logger.error(f"Error deleting relations for {entity_name}: {str(e)}")
+
+    async def search_by_prefix(self, prefix: str) -> list[dict[str, Any]]:
+        """Search for records with IDs starting with a specific prefix.
+
+        Args:
+            prefix: The prefix to search for in record IDs
+
+        Returns:
+            List of records with matching ID prefixes
+        """
+        try:
+            # Use MongoDB regex to find documents where _id starts with the prefix
+            cursor = self._data.find({"_id": {"$regex": f"^{prefix}"}})
+            matching_records = await cursor.to_list(length=None)
+
+            # Format results
+            results = [{**doc, "id": doc["_id"]} for doc in matching_records]
+
+            logger.debug(
+                f"Found {len(results)} records with prefix '{prefix}' in {self.namespace}"
+            )
+            return results
+
+        except PyMongoError as e:
+            logger.error(f"Error searching by prefix in {self.namespace}: {str(e)}")
+            return []
+
+    async def get_by_id(self, id: str) -> dict[str, Any] | None:
+        """Get vector data by its ID
+
+        Args:
+            id: The unique identifier of the vector
+
+        Returns:
+            The vector data if found, or None if not found
+        """
+        try:
+            # Search for the specific ID in MongoDB
+            result = await self._data.find_one({"_id": id})
+            if result:
+                # Format the result to include id field expected by API
+                result_dict = dict(result)
+                if "_id" in result_dict and "id" not in result_dict:
+                    result_dict["id"] = result_dict["_id"]
+                return result_dict
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving vector data for ID {id}: {e}")
+            return None
+
+    async def get_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        """Get multiple vector data by their IDs
+
+        Args:
+            ids: List of unique identifiers
+
+        Returns:
+            List of vector data objects that were found
+        """
+        if not ids:
+            return []
+
+        try:
+            # Query MongoDB for multiple IDs
+            cursor = self._data.find({"_id": {"$in": ids}})
+            results = await cursor.to_list(length=None)
+
+            # Format results to include id field expected by API
+            formatted_results = []
+            for result in results:
+                result_dict = dict(result)
+                if "_id" in result_dict and "id" not in result_dict:
+                    result_dict["id"] = result_dict["_id"]
+                formatted_results.append(result_dict)
+
+            return formatted_results
+        except Exception as e:
+            logger.error(f"Error retrieving vector data for IDs {ids}: {e}")
+            return []
 
 
 async def get_or_create_collection(db: AsyncIOMotorDatabase, collection_name: str):

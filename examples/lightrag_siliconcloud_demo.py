@@ -5,7 +5,7 @@ from lightrag.llm.openai import openai_complete_if_cache
 from lightrag.llm.siliconcloud import siliconcloud_embedding
 from lightrag.utils import EmbeddingFunc
 import numpy as np
-import glob
+from lightrag.kg.shared_storage import initialize_pipeline_status
 
 WORKING_DIR = "./DP"
 
@@ -49,73 +49,56 @@ async def test_funcs():
 asyncio.run(test_funcs())
 
 
-rag = LightRAG(
-    working_dir=WORKING_DIR,
-    llm_model_func=llm_model_func,
-    embedding_func=EmbeddingFunc(
-        embedding_dim=768, max_token_size=512, func=embedding_func
-    ),
-    graph_storage="Neo4JStorage",
-    # log_level="DEBUG",
-)
+async def initialize_rag():
+    rag = LightRAG(
+        working_dir=WORKING_DIR,
+        llm_model_func=llm_model_func,
+        embedding_func=EmbeddingFunc(
+            embedding_dim=768, max_token_size=512, func=embedding_func
+        ),
+    )
 
-import fitz  # PyMuPDF
+    await rag.initialize_storages()
+    await initialize_pipeline_status()
 
-def extract_text_from_pdf(file_path):
-    # Open the PDF file
-    pdf_document = fitz.open(file_path)
-    
-    # Initialize an empty string to store the extracted text
-    text = ""
-    
-    # Iterate over each page in the PDF
-    for page_num in range(len(pdf_document)):
-        # Get the page
-        page = pdf_document.load_page(page_num)
-        
-        # Extract text from the page
-        text += page.get_text()
-    
-    return text
+    return rag
 
-# Example usage
-# file_path = 'TEXT.pdf'
-# text_content = extract_text_from_pdf(file_path)
 
-# rag.insert(text_content)
+def main():
+    # Initialize RAG instance
+    rag = asyncio.run(initialize_rag())
 
-# Function to read all PDF files in a folder and extract text
-def extract_texts_from_pdfs_in_folder(folder_path):
-    pdf_files = glob.glob(os.path.join(folder_path, "*.pdf"))
-    
-    for pdf_file in pdf_files:
-        text = extract_text_from_pdf(pdf_file)
-        print(f"Extracting text from {pdf_file}")
-        rag.insert(text)
+    with open("./book.txt", "r", encoding="utf-8") as f:
+        rag.insert(f.read())
 
-# Example usage
-folder_path = './pdfs'
-extract_texts_from_pdfs_in_folder(folder_path)
+    # Perform naive search
+    print(
+        rag.query(
+            "What are the top themes in this story?", param=QueryParam(mode="naive")
+        )
+    )
 
-# with open("./book.txt", encoding="utf-8") as f:
-#     rag.insert(f.read())
+    # Perform local search
+    print(
+        rag.query(
+            "What are the top themes in this story?", param=QueryParam(mode="local")
+        )
+    )
 
-# Perform naive search
-print(
-    rag.query("数字表演有什么关键方法?", param=QueryParam(mode="naive"))
-)
+    # Perform global search
+    print(
+        rag.query(
+            "What are the top themes in this story?", param=QueryParam(mode="global")
+        )
+    )
 
-# Perform local search
-print(
-    rag.query("数字表演有什么关键方法?", param=QueryParam(mode="local"))
-)
+    # Perform hybrid search
+    print(
+        rag.query(
+            "What are the top themes in this story?", param=QueryParam(mode="hybrid")
+        )
+    )
 
-# Perform global search
-print(
-    rag.query("数字表演有什么关键方法?", param=QueryParam(mode="global"))
-)
 
-# Perform hybrid search
-print(
-    rag.query("数字表演有什么关键方法?", param=QueryParam(mode="hybrid"))
-)
+if __name__ == "__main__":
+    main()

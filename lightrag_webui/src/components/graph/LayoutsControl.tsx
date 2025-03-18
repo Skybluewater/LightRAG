@@ -13,8 +13,10 @@ import Button from '@/components/ui/Button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/Popover'
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/Command'
 import { controlButtonVariant } from '@/lib/constants'
+import { useSettingsStore } from '@/stores/settings'
 
 import { GripIcon, PlayIcon, PauseIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 type LayoutName =
   | 'Circular'
@@ -27,6 +29,7 @@ type LayoutName =
 const WorkerLayoutControl = ({ layout, autoRunFor }: WorkerLayoutControlProps) => {
   const sigma = useSigma()
   const { stop, start, isRunning } = layout
+  const { t } = useTranslation()
 
   /**
    * Init component when Sigma or component settings change.
@@ -60,7 +63,7 @@ const WorkerLayoutControl = ({ layout, autoRunFor }: WorkerLayoutControlProps) =
     <Button
       size="icon"
       onClick={() => (isRunning ? stop() : start())}
-      tooltip={isRunning ? 'Stop the layout animation' : 'Start the layout animation'}
+      tooltip={isRunning ? t('graphPanel.sideBar.layoutsControl.stopAnimation') : t('graphPanel.sideBar.layoutsControl.startAnimation')}
       variant={controlButtonVariant}
     >
       {isRunning ? <PauseIcon /> : <PlayIcon />}
@@ -73,15 +76,18 @@ const WorkerLayoutControl = ({ layout, autoRunFor }: WorkerLayoutControlProps) =
  */
 const LayoutsControl = () => {
   const sigma = useSigma()
+  const { t } = useTranslation()
   const [layout, setLayout] = useState<LayoutName>('Circular')
   const [opened, setOpened] = useState<boolean>(false)
+
+  const maxIterations = useSettingsStore.use.graphLayoutMaxIterations()
 
   const layoutCircular = useLayoutCircular()
   const layoutCirclepack = useLayoutCirclepack()
   const layoutRandom = useLayoutRandom()
   const layoutNoverlap = useLayoutNoverlap({ settings: { margin: 1 } })
-  const layoutForce = useLayoutForce({ maxIterations: 20 })
-  const layoutForceAtlas2 = useLayoutForceAtlas2({ iterations: 20 })
+  const layoutForce = useLayoutForce({ maxIterations: maxIterations })
+  const layoutForceAtlas2 = useLayoutForceAtlas2({ iterations: maxIterations })
   const workerNoverlap = useWorkerLayoutNoverlap()
   const workerForce = useWorkerLayoutForce()
   const workerForceAtlas2 = useWorkerLayoutForceAtlas2()
@@ -146,7 +152,7 @@ const LayoutsControl = () => {
               size="icon"
               variant={controlButtonVariant}
               onClick={() => setOpened((e: boolean) => !e)}
-              tooltip="Layout Graph"
+              tooltip={t('graphPanel.sideBar.layoutsControl.layoutGraph')}
             >
               <GripIcon />
             </Button>
@@ -163,7 +169,7 @@ const LayoutsControl = () => {
                       key={name}
                       className="cursor-pointer text-xs"
                     >
-                      {name}
+                      {t(`graphPanel.sideBar.layoutsControl.layouts.${name}`)}
                     </CommandItem>
                   ))}
                 </CommandGroup>

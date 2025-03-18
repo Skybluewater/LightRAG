@@ -7,7 +7,7 @@ from typing import Any, Union, final
 import numpy as np
 import configparser
 
-from lightrag.types import KnowledgeGraph
+from lightrag.types import KnowledgeGraph, KnowledgeGraphNode, KnowledgeGraphEdge
 
 import sys
 from tenacity import (
@@ -38,8 +38,8 @@ import pipmaster as pm
 if not pm.is_installed("asyncpg"):
     pm.install("asyncpg")
 
-import asyncpg
-from asyncpg import Pool
+import asyncpg  # type: ignore
+from asyncpg import Pool  # type: ignore
 
 
 class PostgreSQLDB:
@@ -432,17 +432,31 @@ class PGVectorStorage(BaseVectorStorage):
 
     def _upsert_entities(self, item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         upsert_sql = SQL_TEMPLATES["upsert_entity"]
+        source_id = item["source_id"]
+        if isinstance(source_id, str) and "<SEP>" in source_id:
+            chunk_ids = source_id.split("<SEP>")
+        else:
+            chunk_ids = [source_id]
+
         data: dict[str, Any] = {
             "workspace": self.db.workspace,
             "id": item["__id__"],
             "entity_name": item["entity_name"],
             "content": item["content"],
             "content_vector": json.dumps(item["__vector__"].tolist()),
+            "chunk_ids": chunk_ids,
+            # TODO: add document_id
         }
         return upsert_sql, data
 
     def _upsert_relationships(self, item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         upsert_sql = SQL_TEMPLATES["upsert_relationship"]
+        source_id = item["source_id"]
+        if isinstance(source_id, str) and "<SEP>" in source_id:
+            chunk_ids = source_id.split("<SEP>")
+        else:
+            chunk_ids = [source_id]
+
         data: dict[str, Any] = {
             "workspace": self.db.workspace,
             "id": item["__id__"],
@@ -450,6 +464,8 @@ class PGVectorStorage(BaseVectorStorage):
             "target_id": item["tgt_id"],
             "content": item["content"],
             "content_vector": json.dumps(item["__vector__"].tolist()),
+            "chunk_ids": chunk_ids,
+            # TODO: add document_id
         }
         return upsert_sql, data
 
@@ -492,13 +508,20 @@ class PGVectorStorage(BaseVectorStorage):
             await self.db.execute(upsert_sql, data)
 
     #################### query method ###############
-    async def query(self, query: str, top_k: int) -> list[dict[str, Any]]:
+    async def query(
+        self, query: str, top_k: int, ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         embeddings = await self.embedding_func([query])
         embedding = embeddings[0]
         embedding_string = ",".join(map(str, embedding))
 
+        if ids:
+            formatted_ids = ",".join(f"'{id}'" for id in ids)
+        else:
+            formatted_ids = "NULL"
+
         sql = SQL_TEMPLATES[self.base_namespace].format(
-            embedding_string=embedding_string
+            embedding_string=embedding_string, doc_ids=formatted_ids
         )
         params = {
             "workspace": self.db.workspace,
@@ -512,11 +535,157 @@ class PGVectorStorage(BaseVectorStorage):
         # PG handles persistence automatically
         pass
 
+    async def delete(self, ids: list[str]) -> None:
+        """Delete vectors with specified IDs from the storage.
+
+        Args:
+            ids: List of vector IDs to be deleted
+        """
+        if not ids:
+            return
+
+        table_name = namespace_to_table_name(self.namespace)
+        if not table_name:
+            logger.error(f"Unknown namespace for vector deletion: {self.namespace}")
+            return
+
+        ids_list = ",".join([f"'{id}'" for id in ids])
+        delete_sql = (
+            f"DELETE FROM {table_name} WHERE workspace=$1 AND id IN ({ids_list})"
+        )
+
+        try:
+            await self.db.execute(delete_sql, {"workspace": self.db.workspace})
+            logger.debug(
+                f"Successfully deleted {len(ids)} vectors from {self.namespace}"
+            )
+        except Exception as e:
+            logger.error(f"Error while deleting vectors from {self.namespace}: {e}")
+
     async def delete_entity(self, entity_name: str) -> None:
-        raise NotImplementedError
+        """Delete an entity by its name from the vector storage.
+
+        Args:
+            entity_name: The name of the entity to delete
+        """
+        try:
+            # Construct SQL to delete the entity
+            delete_sql = """DELETE FROM LIGHTRAG_VDB_ENTITY
+                            WHERE workspace=$1 AND entity_name=$2"""
+
+            await self.db.execute(
+                delete_sql, {"workspace": self.db.workspace, "entity_name": entity_name}
+            )
+            logger.debug(f"Successfully deleted entity {entity_name}")
+        except Exception as e:
+            logger.error(f"Error deleting entity {entity_name}: {e}")
 
     async def delete_entity_relation(self, entity_name: str) -> None:
-        raise NotImplementedError
+        """Delete all relations associated with an entity.
+
+        Args:
+            entity_name: The name of the entity whose relations should be deleted
+        """
+        try:
+            # Delete relations where the entity is either the source or target
+            delete_sql = """DELETE FROM LIGHTRAG_VDB_RELATION
+                            WHERE workspace=$1 AND (source_id=$2 OR target_id=$2)"""
+
+            await self.db.execute(
+                delete_sql, {"workspace": self.db.workspace, "entity_name": entity_name}
+            )
+            logger.debug(f"Successfully deleted relations for entity {entity_name}")
+        except Exception as e:
+            logger.error(f"Error deleting relations for entity {entity_name}: {e}")
+
+    async def search_by_prefix(self, prefix: str) -> list[dict[str, Any]]:
+        """Search for records with IDs starting with a specific prefix.
+
+        Args:
+            prefix: The prefix to search for in record IDs
+
+        Returns:
+            List of records with matching ID prefixes
+        """
+        table_name = namespace_to_table_name(self.namespace)
+        if not table_name:
+            logger.error(f"Unknown namespace for prefix search: {self.namespace}")
+            return []
+
+        search_sql = f"SELECT * FROM {table_name} WHERE workspace=$1 AND id LIKE $2"
+        params = {"workspace": self.db.workspace, "prefix": f"{prefix}%"}
+
+        try:
+            results = await self.db.query(search_sql, params, multirows=True)
+            logger.debug(f"Found {len(results)} records with prefix '{prefix}'")
+
+            # Format results to match the expected return format
+            formatted_results = []
+            for record in results:
+                formatted_record = dict(record)
+                # Ensure id field is available (for consistency with NanoVectorDB implementation)
+                if "id" not in formatted_record:
+                    formatted_record["id"] = record["id"]
+                formatted_results.append(formatted_record)
+
+            return formatted_results
+        except Exception as e:
+            logger.error(f"Error during prefix search for '{prefix}': {e}")
+            return []
+
+    async def get_by_id(self, id: str) -> dict[str, Any] | None:
+        """Get vector data by its ID
+
+        Args:
+            id: The unique identifier of the vector
+
+        Returns:
+            The vector data if found, or None if not found
+        """
+        table_name = namespace_to_table_name(self.namespace)
+        if not table_name:
+            logger.error(f"Unknown namespace for ID lookup: {self.namespace}")
+            return None
+
+        query = f"SELECT * FROM {table_name} WHERE workspace=$1 AND id=$2"
+        params = {"workspace": self.db.workspace, "id": id}
+
+        try:
+            result = await self.db.query(query, params)
+            if result:
+                return dict(result)
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving vector data for ID {id}: {e}")
+            return None
+
+    async def get_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        """Get multiple vector data by their IDs
+
+        Args:
+            ids: List of unique identifiers
+
+        Returns:
+            List of vector data objects that were found
+        """
+        if not ids:
+            return []
+
+        table_name = namespace_to_table_name(self.namespace)
+        if not table_name:
+            logger.error(f"Unknown namespace for IDs lookup: {self.namespace}")
+            return []
+
+        ids_str = ",".join([f"'{id}'" for id in ids])
+        query = f"SELECT * FROM {table_name} WHERE workspace=$1 AND id IN ({ids_str})"
+        params = {"workspace": self.db.workspace}
+
+        try:
+            results = await self.db.query(query, params, multirows=True)
+            return [dict(record) for record in results]
+        except Exception as e:
+            logger.error(f"Error retrieving vector data for IDs {ids}: {e}")
+            return []
 
 
 @final
@@ -598,7 +767,7 @@ class PGDocStatusStorage(DocStatusStorage):
         result = await self.db.query(sql, params, True)
         docs_by_status = {
             element["id"]: DocProcessingStatus(
-                content=result[0]["content"],
+                content=element["content"],
                 content_summary=element["content_summary"],
                 content_length=element["content_length"],
                 status=element["status"],
@@ -718,42 +887,86 @@ class PGGraphStorage(BaseGraphStorage):
             v = record[k]
             # agtype comes back '{key: value}::type' which must be parsed
             if isinstance(v, str) and "::" in v:
-                dtype = v.split("::")[-1]
-                v = v.split("::")[0]
-                if dtype == "vertex":
-                    vertex = json.loads(v)
-                    vertices[vertex["id"]] = vertex.get("properties")
+                if v.startswith("[") and v.endswith("]"):
+                    if "::vertex" not in v:
+                        continue
+                    v = v.replace("::vertex", "")
+                    vertexes = json.loads(v)
+                    for vertex in vertexes:
+                        vertices[vertex["id"]] = vertex.get("properties")
+                else:
+                    dtype = v.split("::")[-1]
+                    v = v.split("::")[0]
+                    if dtype == "vertex":
+                        vertex = json.loads(v)
+                        vertices[vertex["id"]] = vertex.get("properties")
 
         # iterate returned fields and parse appropriately
         for k in record.keys():
             v = record[k]
             if isinstance(v, str) and "::" in v:
-                dtype = v.split("::")[-1]
-                v = v.split("::")[0]
-            else:
-                dtype = ""
+                if v.startswith("[") and v.endswith("]"):
+                    if "::vertex" in v:
+                        v = v.replace("::vertex", "")
+                        vertexes = json.loads(v)
+                        dl = []
+                        for vertex in vertexes:
+                            prop = vertex.get("properties")
+                            if not prop:
+                                prop = {}
+                            prop["label"] = PGGraphStorage._decode_graph_label(
+                                prop["node_id"]
+                            )
+                            dl.append(prop)
+                        d[k] = dl
 
-            if dtype == "vertex":
-                vertex = json.loads(v)
-                field = vertex.get("properties")
-                if not field:
-                    field = {}
-                field["label"] = PGGraphStorage._decode_graph_label(field["node_id"])
-                d[k] = field
-            # convert edge from id-label->id by replacing id with node information
-            # we only do this if the vertex was also returned in the query
-            # this is an attempt to be consistent with neo4j implementation
-            elif dtype == "edge":
-                edge = json.loads(v)
-                d[k] = (
-                    vertices.get(edge["start_id"], {}),
-                    edge[
-                        "label"
-                    ],  # we don't use decode_graph_label(), since edge label is always "DIRECTED"
-                    vertices.get(edge["end_id"], {}),
-                )
+                    elif "::edge" in v:
+                        v = v.replace("::edge", "")
+                        edges = json.loads(v)
+                        dl = []
+                        for edge in edges:
+                            dl.append(
+                                (
+                                    vertices[edge["start_id"]],
+                                    edge["label"],
+                                    vertices[edge["end_id"]],
+                                )
+                            )
+                        d[k] = dl
+                    else:
+                        print("WARNING: unsupported type")
+                        continue
+
+                else:
+                    dtype = v.split("::")[-1]
+                    v = v.split("::")[0]
+                    if dtype == "vertex":
+                        vertex = json.loads(v)
+                        field = vertex.get("properties")
+                        if not field:
+                            field = {}
+                        field["label"] = PGGraphStorage._decode_graph_label(
+                            field["node_id"]
+                        )
+                        d[k] = field
+                    # convert edge from id-label->id by replacing id with node information
+                    # we only do this if the vertex was also returned in the query
+                    # this is an attempt to be consistent with neo4j implementation
+                    elif dtype == "edge":
+                        edge = json.loads(v)
+                        d[k] = (
+                            vertices.get(edge["start_id"], {}),
+                            edge[
+                                "label"
+                            ],  # we don't use decode_graph_label(), since edge label is always "DIRECTED"
+                            vertices.get(edge["end_id"], {}),
+                        )
             else:
-                d[k] = json.loads(v) if isinstance(v, str) else v
+                d[k] = (
+                    json.loads(v)
+                    if isinstance(v, str) and ("{" in v or "[" in v)
+                    else v
+                )
 
         return d
 
@@ -1086,20 +1299,208 @@ class PGGraphStorage(BaseGraphStorage):
         print("Implemented but never called.")
 
     async def delete_node(self, node_id: str) -> None:
-        raise NotImplementedError
+        """
+        Delete a node from the graph.
+
+        Args:
+            node_id (str): The ID of the node to delete.
+        """
+        label = self._encode_graph_label(node_id.strip('"'))
+
+        query = """SELECT * FROM cypher('%s', $$
+                     MATCH (n:Entity {node_id: "%s"})
+                     DETACH DELETE n
+                   $$) AS (n agtype)""" % (self.graph_name, label)
+
+        try:
+            await self._query(query, readonly=False)
+        except Exception as e:
+            logger.error("Error during node deletion: {%s}", e)
+            raise
+
+    async def remove_nodes(self, node_ids: list[str]) -> None:
+        """
+        Remove multiple nodes from the graph.
+
+        Args:
+            node_ids (list[str]): A list of node IDs to remove.
+        """
+        encoded_node_ids = [
+            self._encode_graph_label(node_id.strip('"')) for node_id in node_ids
+        ]
+        node_id_list = ", ".join([f'"{node_id}"' for node_id in encoded_node_ids])
+
+        query = """SELECT * FROM cypher('%s', $$
+                     MATCH (n:Entity)
+                     WHERE n.node_id IN [%s]
+                     DETACH DELETE n
+                   $$) AS (n agtype)""" % (self.graph_name, node_id_list)
+
+        try:
+            await self._query(query, readonly=False)
+        except Exception as e:
+            logger.error("Error during node removal: {%s}", e)
+            raise
+
+    async def remove_edges(self, edges: list[tuple[str, str]]) -> None:
+        """
+        Remove multiple edges from the graph.
+
+        Args:
+            edges (list[tuple[str, str]]): A list of edges to remove, where each edge is a tuple of (source_node_id, target_node_id).
+        """
+        encoded_edges = [
+            (
+                self._encode_graph_label(src.strip('"')),
+                self._encode_graph_label(tgt.strip('"')),
+            )
+            for src, tgt in edges
+        ]
+        edge_list = ", ".join([f'["{src}", "{tgt}"]' for src, tgt in encoded_edges])
+
+        query = """SELECT * FROM cypher('%s', $$
+                     MATCH (a:Entity)-[r]->(b:Entity)
+                     WHERE [a.node_id, b.node_id] IN [%s]
+                     DELETE r
+                   $$) AS (r agtype)""" % (self.graph_name, edge_list)
+
+        try:
+            await self._query(query, readonly=False)
+        except Exception as e:
+            logger.error("Error during edge removal: {%s}", e)
+            raise
+
+    async def get_all_labels(self) -> list[str]:
+        """
+        Get all labels (node IDs) in the graph.
+
+        Returns:
+            list[str]: A list of all labels in the graph.
+        """
+        query = (
+            """SELECT * FROM cypher('%s', $$
+                     MATCH (n:Entity)
+                     RETURN DISTINCT n.node_id AS label
+                   $$) AS (label text)"""
+            % self.graph_name
+        )
+
+        results = await self._query(query)
+        labels = [self._decode_graph_label(result["label"]) for result in results]
+
+        return labels
 
     async def embed_nodes(
         self, algorithm: str
     ) -> tuple[np.ndarray[Any, Any], list[str]]:
-        raise NotImplementedError
+        """
+        Generate node embeddings using the specified algorithm.
 
-    async def get_all_labels(self) -> list[str]:
-        raise NotImplementedError
+        Args:
+            algorithm (str): The name of the embedding algorithm to use.
+
+        Returns:
+            tuple[np.ndarray[Any, Any], list[str]]: A tuple containing the embeddings and the corresponding node IDs.
+        """
+        if algorithm not in self._node_embed_algorithms:
+            raise ValueError(f"Unsupported embedding algorithm: {algorithm}")
+
+        embed_func = self._node_embed_algorithms[algorithm]
+        return await embed_func()
 
     async def get_knowledge_graph(
         self, node_label: str, max_depth: int = 5
     ) -> KnowledgeGraph:
-        raise NotImplementedError
+        """
+        Retrieve a subgraph containing the specified node and its neighbors up to the specified depth.
+
+        Args:
+            node_label (str): The label of the node to start from. If "*", the entire graph is returned.
+            max_depth (int): The maximum depth to traverse from the starting node.
+
+        Returns:
+            KnowledgeGraph: The retrieved subgraph.
+        """
+        MAX_GRAPH_NODES = 1000
+
+        # Build the query based on whether we want the full graph or a specific subgraph.
+        if node_label == "*":
+            query = f"""SELECT * FROM cypher('{self.graph_name}', $$
+                        MATCH (n:Entity)
+                        OPTIONAL MATCH (n)-[r]->(m:Entity)
+                        RETURN n, r, m
+                        LIMIT {MAX_GRAPH_NODES}
+                      $$) AS (n agtype, r agtype, m agtype)"""
+        else:
+            encoded_label = self._encode_graph_label(node_label.strip('"'))
+            query = f"""SELECT * FROM cypher('{self.graph_name}', $$
+                        MATCH (n:Entity {{node_id: "{encoded_label}"}})
+                        OPTIONAL MATCH p = (n)-[*..{max_depth}]-(m)
+                        RETURN nodes(p) AS nodes, relationships(p) AS relationships
+                        LIMIT {MAX_GRAPH_NODES}
+                      $$) AS (nodes agtype, relationships agtype)"""
+
+        results = await self._query(query)
+
+        nodes = {}
+        edges = []
+        unique_edge_ids = set()
+
+        def add_node(node_data: dict):
+            node_id = self._decode_graph_label(node_data["node_id"])
+            if node_id not in nodes:
+                nodes[node_id] = node_data
+
+        def add_edge(edge_data: list):
+            src_id = self._decode_graph_label(edge_data[0]["node_id"])
+            tgt_id = self._decode_graph_label(edge_data[2]["node_id"])
+            edge_key = f"{src_id},{tgt_id}"
+            if edge_key not in unique_edge_ids:
+                unique_edge_ids.add(edge_key)
+                edges.append(
+                    (
+                        edge_key,
+                        src_id,
+                        tgt_id,
+                        {"source": edge_data[0], "target": edge_data[2]},
+                    )
+                )
+
+        # Process the query results.
+        if node_label == "*":
+            for result in results:
+                if result.get("n"):
+                    add_node(result["n"])
+                if result.get("m"):
+                    add_node(result["m"])
+                if result.get("r"):
+                    add_edge(result["r"])
+        else:
+            for result in results:
+                for node in result.get("nodes", []):
+                    add_node(node)
+                for edge in result.get("relationships", []):
+                    add_edge(edge)
+
+        # Construct and return the KnowledgeGraph.
+        kg = KnowledgeGraph(
+            nodes=[
+                KnowledgeGraphNode(id=node_id, labels=[node_id], properties=node_data)
+                for node_id, node_data in nodes.items()
+            ],
+            edges=[
+                KnowledgeGraphEdge(
+                    id=edge_id,
+                    type="DIRECTED",
+                    source=src,
+                    target=tgt,
+                    properties=props,
+                )
+                for edge_id, src, tgt, props in edges
+            ],
+        )
+
+        return kg
 
     async def drop(self) -> None:
         """Drop the storage"""
@@ -1162,6 +1563,7 @@ TABLES = {
                     content_vector VECTOR,
                     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP,
+                    chunk_id TEXT NULL,
 	                CONSTRAINT LIGHTRAG_VDB_ENTITY_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -1175,6 +1577,7 @@ TABLES = {
                     content_vector VECTOR,
                     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP,
+                    chunk_id TEXT NULL,
 	                CONSTRAINT LIGHTRAG_VDB_RELATION_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -1257,39 +1660,43 @@ SQL_TEMPLATES = {
                       content_vector=EXCLUDED.content_vector,
                       update_time = CURRENT_TIMESTAMP
                      """,
-    "upsert_entity": """INSERT INTO LIGHTRAG_VDB_ENTITY (workspace, id, entity_name, content, content_vector)
-                      VALUES ($1, $2, $3, $4, $5)
+    "upsert_entity": """INSERT INTO LIGHTRAG_VDB_ENTITY (workspace, id, entity_name, content,
+                      content_vector, chunk_ids)
+                      VALUES ($1, $2, $3, $4, $5, $6::varchar[])
                       ON CONFLICT (workspace,id) DO UPDATE
                       SET entity_name=EXCLUDED.entity_name,
                       content=EXCLUDED.content,
                       content_vector=EXCLUDED.content_vector,
+                      chunk_ids=EXCLUDED.chunk_ids,
                       update_time=CURRENT_TIMESTAMP
                      """,
     "upsert_relationship": """INSERT INTO LIGHTRAG_VDB_RELATION (workspace, id, source_id,
-                      target_id, content, content_vector)
-                      VALUES ($1, $2, $3, $4, $5, $6)
+                      target_id, content, content_vector, chunk_ids)
+                      VALUES ($1, $2, $3, $4, $5, $6, $7::varchar[])
                       ON CONFLICT (workspace,id) DO UPDATE
                       SET source_id=EXCLUDED.source_id,
                       target_id=EXCLUDED.target_id,
                       content=EXCLUDED.content,
-                      content_vector=EXCLUDED.content_vector, update_time = CURRENT_TIMESTAMP
+                      content_vector=EXCLUDED.content_vector,
+                      chunk_ids=EXCLUDED.chunk_ids,
+                      update_time = CURRENT_TIMESTAMP
                      """,
     # SQL for VectorStorage
-    "entities": """SELECT entity_name FROM
-        (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_VDB_ENTITY where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
-       """,
-    "relationships": """SELECT source_id as src_id, target_id as tgt_id FROM
-        (SELECT id, source_id,target_id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_VDB_RELATION where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
-       """,
-    "chunks": """SELECT id FROM
-        (SELECT id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_DOC_CHUNKS where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
-       """,
+    # "entities": """SELECT entity_name FROM
+    #     (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+    #     FROM LIGHTRAG_VDB_ENTITY where workspace=$1)
+    #     WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+    #    """,
+    # "relationships": """SELECT source_id as src_id, target_id as tgt_id FROM
+    #     (SELECT id, source_id,target_id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+    #     FROM LIGHTRAG_VDB_RELATION where workspace=$1)
+    #     WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+    #    """,
+    # "chunks": """SELECT id FROM
+    #     (SELECT id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+    #     FROM LIGHTRAG_DOC_CHUNKS where workspace=$1)
+    #     WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+    #    """,
     # DROP tables
     "drop_all": """
 	    DROP TABLE IF EXISTS LIGHTRAG_DOC_FULL CASCADE;
@@ -1313,4 +1720,55 @@ SQL_TEMPLATES = {
     "drop_vdb_relation": """
 	    DROP TABLE IF EXISTS LIGHTRAG_VDB_RELATION CASCADE;
        """,
+    "relationships": """
+    WITH relevant_chunks AS (
+        SELECT id as chunk_id
+        FROM LIGHTRAG_DOC_CHUNKS
+        WHERE {doc_ids} IS NULL OR full_doc_id = ANY(ARRAY[{doc_ids}])
+    )
+    SELECT source_id as src_id, target_id as tgt_id
+    FROM (
+        SELECT r.id, r.source_id, r.target_id, 1 - (r.content_vector <=> '[{embedding_string}]'::vector) as distance
+        FROM LIGHTRAG_VDB_RELATION r
+        JOIN relevant_chunks c ON c.chunk_id = ANY(r.chunk_ids)
+        WHERE r.workspace=$1
+    ) filtered
+    WHERE distance>$2
+    ORDER BY distance DESC
+    LIMIT $3
+    """,
+    "entities": """
+        WITH relevant_chunks AS (
+            SELECT id as chunk_id
+            FROM LIGHTRAG_DOC_CHUNKS
+            WHERE {doc_ids} IS NULL OR full_doc_id = ANY(ARRAY[{doc_ids}])
+        )
+        SELECT entity_name FROM
+            (
+                SELECT e.id, e.entity_name, 1 - (e.content_vector <=> '[{embedding_string}]'::vector) as distance
+                FROM LIGHTRAG_VDB_ENTITY e
+                JOIN relevant_chunks c ON c.chunk_id = ANY(e.chunk_ids)
+                WHERE e.workspace=$1
+            )
+        WHERE distance>$2
+        ORDER BY distance DESC
+        LIMIT $3
+    """,
+    "chunks": """
+        WITH relevant_chunks AS (
+            SELECT id as chunk_id
+            FROM LIGHTRAG_DOC_CHUNKS
+            WHERE {doc_ids} IS NULL OR full_doc_id = ANY(ARRAY[{doc_ids}])
+        )
+        SELECT id FROM
+            (
+                SELECT id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+                FROM LIGHTRAG_DOC_CHUNKS
+                where workspace=$1
+                AND id IN (SELECT chunk_id FROM relevant_chunks)
+            ) as chunk_distances
+            WHERE distance>$2
+            ORDER BY distance DESC
+            LIMIT $3
+    """,
 }

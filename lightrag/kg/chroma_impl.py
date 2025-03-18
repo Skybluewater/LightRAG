@@ -156,7 +156,9 @@ class ChromaVectorDBStorage(BaseVectorStorage):
             logger.error(f"Error during ChromaDB upsert: {str(e)}")
             raise
 
-    async def query(self, query: str, top_k: int) -> list[dict[str, Any]]:
+    async def query(
+        self, query: str, top_k: int, ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         try:
             embedding = await self.embedding_func([query])
 
@@ -193,7 +195,143 @@ class ChromaVectorDBStorage(BaseVectorStorage):
         pass
 
     async def delete_entity(self, entity_name: str) -> None:
-        raise NotImplementedError
+        """Delete an entity by its ID.
+
+        Args:
+            entity_name: The ID of the entity to delete
+        """
+        try:
+            logger.info(f"Deleting entity with ID {entity_name} from {self.namespace}")
+            self._collection.delete(ids=[entity_name])
+        except Exception as e:
+            logger.error(f"Error during entity deletion: {str(e)}")
+            raise
 
     async def delete_entity_relation(self, entity_name: str) -> None:
-        raise NotImplementedError
+        """Delete an entity and its relations by ID.
+        In vector DB context, this is equivalent to delete_entity.
+
+        Args:
+            entity_name: The ID of the entity to delete
+        """
+        await self.delete_entity(entity_name)
+
+    async def delete(self, ids: list[str]) -> None:
+        """Delete vectors with specified IDs
+
+        Args:
+            ids: List of vector IDs to be deleted
+        """
+        try:
+            logger.info(f"Deleting {len(ids)} vectors from {self.namespace}")
+            self._collection.delete(ids=ids)
+            logger.debug(
+                f"Successfully deleted {len(ids)} vectors from {self.namespace}"
+            )
+        except Exception as e:
+            logger.error(f"Error while deleting vectors from {self.namespace}: {e}")
+            raise
+
+    async def search_by_prefix(self, prefix: str) -> list[dict[str, Any]]:
+        """Search for records with IDs starting with a specific prefix.
+
+        Args:
+            prefix: The prefix to search for in record IDs
+
+        Returns:
+            List of records with matching ID prefixes
+        """
+        try:
+            # Get all records from the collection
+            # Since ChromaDB doesn't directly support prefix search on IDs,
+            # we'll get all records and filter in Python
+            results = self._collection.get(
+                include=["metadatas", "documents", "embeddings"]
+            )
+
+            matching_records = []
+
+            # Filter records where ID starts with the prefix
+            for i, record_id in enumerate(results["ids"]):
+                if record_id.startswith(prefix):
+                    matching_records.append(
+                        {
+                            "id": record_id,
+                            "content": results["documents"][i],
+                            "vector": results["embeddings"][i],
+                            **results["metadatas"][i],
+                        }
+                    )
+
+            logger.debug(
+                f"Found {len(matching_records)} records with prefix '{prefix}'"
+            )
+            return matching_records
+
+        except Exception as e:
+            logger.error(f"Error during prefix search in ChromaDB: {str(e)}")
+            raise
+
+    async def get_by_id(self, id: str) -> dict[str, Any] | None:
+        """Get vector data by its ID
+
+        Args:
+            id: The unique identifier of the vector
+
+        Returns:
+            The vector data if found, or None if not found
+        """
+        try:
+            # Query the collection for a single vector by ID
+            result = self._collection.get(
+                ids=[id], include=["metadatas", "embeddings", "documents"]
+            )
+
+            if not result or not result["ids"] or len(result["ids"]) == 0:
+                return None
+
+            # Format the result to match the expected structure
+            return {
+                "id": result["ids"][0],
+                "vector": result["embeddings"][0],
+                "content": result["documents"][0],
+                **result["metadatas"][0],
+            }
+        except Exception as e:
+            logger.error(f"Error retrieving vector data for ID {id}: {e}")
+            return None
+
+    async def get_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        """Get multiple vector data by their IDs
+
+        Args:
+            ids: List of unique identifiers
+
+        Returns:
+            List of vector data objects that were found
+        """
+        if not ids:
+            return []
+
+        try:
+            # Query the collection for multiple vectors by IDs
+            result = self._collection.get(
+                ids=ids, include=["metadatas", "embeddings", "documents"]
+            )
+
+            if not result or not result["ids"] or len(result["ids"]) == 0:
+                return []
+
+            # Format the results to match the expected structure
+            return [
+                {
+                    "id": result["ids"][i],
+                    "vector": result["embeddings"][i],
+                    "content": result["documents"][i],
+                    **result["metadatas"][i],
+                }
+                for i in range(len(result["ids"]))
+            ]
+        except Exception as e:
+            logger.error(f"Error retrieving vector data for IDs {ids}: {e}")
+            return []

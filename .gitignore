@@ -21,6 +21,7 @@ site/
 
 # Logs / Reports
 *.log
+*.log.*
 *.logfire
 *.coverage/
 log/
@@ -67,3 +68,6 @@ gui/
 
 # unit-test files
 test_*
+
+# Cline files
+memory-bank/

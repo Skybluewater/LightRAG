@@ -5,12 +5,11 @@ import { defaultQueryLabel } from '@/lib/constants'
 import { Message, QueryRequest } from '@/api/lightrag'
 
 type Theme = 'dark' | 'light' | 'system'
+type Language = 'en' | 'zh'
 type Tab = 'documents' | 'knowledge-graph' | 'retrieval' | 'api'
 
 interface SettingsState {
-  theme: Theme
-  setTheme: (theme: Theme) => void
-
+  // Graph viewer settings
   showPropertyPanel: boolean
   showNodeSearchBar: boolean
 
@@ -21,30 +20,48 @@ interface SettingsState {
   enableHideUnselectedEdges: boolean
   enableEdgeEvents: boolean
 
+  graphQueryMaxDepth: number
+  setGraphQueryMaxDepth: (depth: number) => void
+
+  graphMinDegree: number
+  setGraphMinDegree: (degree: number) => void
+
+  graphLayoutMaxIterations: number
+  setGraphLayoutMaxIterations: (iterations: number) => void
+
+  // Retrieval settings
   queryLabel: string
   setQueryLabel: (queryLabel: string) => void
-
-  enableHealthCheck: boolean
-  setEnableHealthCheck: (enable: boolean) => void
-
-  apiKey: string | null
-  setApiKey: (key: string | null) => void
-
-  currentTab: Tab
-  setCurrentTab: (tab: Tab) => void
 
   retrievalHistory: Message[]
   setRetrievalHistory: (history: Message[]) => void
 
   querySettings: Omit<QueryRequest, 'query'>
   updateQuerySettings: (settings: Partial<QueryRequest>) => void
+
+  // Auth settings
+  apiKey: string | null
+  setApiKey: (key: string | null) => void
+
+  // App settings
+  theme: Theme
+  setTheme: (theme: Theme) => void
+
+  language: Language
+  setLanguage: (lang: Language) => void
+
+  enableHealthCheck: boolean
+  setEnableHealthCheck: (enable: boolean) => void
+
+  currentTab: Tab
+  setCurrentTab: (tab: Tab) => void
 }
 
 const useSettingsStoreBase = create<SettingsState>()(
   persist(
     (set) => ({
       theme: 'system',
-
+      language: 'en',
       showPropertyPanel: true,
       showNodeSearchBar: true,
 
@@ -55,7 +72,12 @@ const useSettingsStoreBase = create<SettingsState>()(
       enableHideUnselectedEdges: true,
       enableEdgeEvents: false,
 
+      graphQueryMaxDepth: 3,
+      graphMinDegree: 0,
+      graphLayoutMaxIterations: 15,
+
       queryLabel: defaultQueryLabel,
+
       enableHealthCheck: true,
 
       apiKey: null,
@@ -81,10 +103,29 @@ const useSettingsStoreBase = create<SettingsState>()(
 
       setTheme: (theme: Theme) => set({ theme }),
 
+      setLanguage: (language: Language) => {
+        set({ language })
+        // Update i18n after state is updated
+        import('i18next').then(({ default: i18n }) => {
+          if (i18n.language !== language) {
+            i18n.changeLanguage(language)
+          }
+        })
+      },
+
+      setGraphLayoutMaxIterations: (iterations: number) =>
+        set({
+          graphLayoutMaxIterations: iterations
+        }),
+
       setQueryLabel: (queryLabel: string) =>
         set({
           queryLabel
         }),
+
+      setGraphQueryMaxDepth: (depth: number) => set({ graphQueryMaxDepth: depth }),
+
+      setGraphMinDegree: (degree: number) => set({ graphMinDegree: degree }),
 
       setEnableHealthCheck: (enable: boolean) => set({ enableHealthCheck: enable }),
 
@@ -102,7 +143,7 @@ const useSettingsStoreBase = create<SettingsState>()(
     {
       name: 'settings-storage',
       storage: createJSONStorage(() => localStorage),
-      version: 6,
+      version: 8,
       migrate: (state: any, version: number) => {
         if (version < 2) {
           state.showEdgeLabel = false
@@ -136,6 +177,14 @@ const useSettingsStoreBase = create<SettingsState>()(
             ll_keywords: []
           }
           state.retrievalHistory = []
+        }
+        if (version < 7) {
+          state.graphQueryMaxDepth = 3
+          state.graphLayoutMaxIterations = 15
+        }
+        if (version < 8) {
+          state.graphMinDegree = 0
+          state.language = 'en'
         }
         return state
       }

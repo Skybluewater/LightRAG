@@ -1,38 +1,18 @@
 import Input from '@/components/ui/Input'
 import Button from '@/components/ui/Button'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { queryText, queryTextStream, Message as ChatMessage } from '@/api/lightrag'
+import { queryText, queryTextStream, Message } from '@/api/lightrag'
 import { errorMessage } from '@/lib/utils'
 import { useSettingsStore } from '@/stores/settings'
 import { useDebounce } from '@/hooks/useDebounce'
 import QuerySettings from '@/components/retrieval/QuerySettings'
-
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeReact from 'rehype-react'
-import remarkMath from 'remark-math'
-
-import { EraserIcon, SendIcon, LoaderIcon } from 'lucide-react'
-
-type Message = ChatMessage & {
-  isError?: boolean
-}
-
-const ChatMessageComponent = ({ message }: { message: Message }) => {
-  return (
-    <ReactMarkdown
-      className="prose lg:prose-xs dark:prose-invert max-w-none text-base"
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeReact]}
-      skipHtml={false}
-    >
-      {message.content}
-    </ReactMarkdown>
-  )
-}
+import { ChatMessage, MessageWithError } from '@/components/retrieval/ChatMessage'
+import { EraserIcon, SendIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 export default function RetrievalTesting() {
-  const [messages, setMessages] = useState<Message[]>(
+  const { t } = useTranslation()
+  const [messages, setMessages] = useState<MessageWithError[]>(
     () => useSettingsStore.getState().retrievalHistory || []
   )
   const [inputValue, setInputValue] = useState('')
@@ -111,7 +91,7 @@ export default function RetrievalTesting() {
         }
       } catch (err) {
         // Handle error
-        updateAssistantMessage(`Error: Failed to get response\n${errorMessage(err)}`, true)
+        updateAssistantMessage(`${t('retrievePanel.retrieval.error')}\n${errorMessage(err)}`, true)
       } finally {
         // Clear loading and add messages to state
         setIsLoading(false)
@@ -120,7 +100,7 @@ export default function RetrievalTesting() {
           .setRetrievalHistory([...prevMessages, userMessage, assistantMessage])
       }
     },
-    [inputValue, isLoading, messages, setMessages]
+    [inputValue, isLoading, messages, setMessages, t]
   )
 
   const debouncedMessages = useDebounce(messages, 100)
@@ -139,7 +119,7 @@ export default function RetrievalTesting() {
             <div className="flex min-h-0 flex-1 flex-col gap-2">
               {messages.length === 0 ? (
                 <div className="text-muted-foreground flex h-full items-center justify-center text-lg">
-                  Start a retrieval by typing your query below
+                  {t('retrievePanel.retrieval.startPrompt')}
                 </div>
               ) : (
                 messages.map((message, idx) => (
@@ -147,22 +127,7 @@ export default function RetrievalTesting() {
                     key={idx}
                     className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
-                    <div
-                      className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                        message.role === 'user'
-                          ? 'bg-primary text-primary-foreground'
-                          : message.isError
-                            ? 'bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400'
-                            : 'bg-muted'
-                      }`}
-                    >
-                      <pre className="break-words whitespace-pre-wrap">
-                        {<ChatMessageComponent message={message} />}
-                      </pre>
-                      {message.content.length === 0 && (
-                        <LoaderIcon className="animate-spin duration-2000" />
-                      )}
-                    </div>
+                    {<ChatMessage message={message} />}
                   </div>
                 ))
               )}
@@ -180,18 +145,18 @@ export default function RetrievalTesting() {
             size="sm"
           >
             <EraserIcon />
-            Clear
+            {t('retrievePanel.retrieval.clear')}
           </Button>
           <Input
             className="flex-1"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            placeholder="Type your query..."
+            placeholder={t('retrievePanel.retrieval.placeholder')}
             disabled={isLoading}
           />
           <Button type="submit" variant="default" disabled={isLoading} size="sm">
             <SendIcon />
-            Send
+            {t('retrievePanel.retrieval.send')}
           </Button>
         </form>
       </div>

@@ -7,7 +7,7 @@ from lightrag.utils import EmbeddingFunc
 import numpy as np
 import glob
 
-WORKING_DIR = "./ragtest"
+WORKING_DIR = "./20250317"
 
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
