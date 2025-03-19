@@ -52,8 +52,20 @@ def chunking_by_late_chunk(
     max_token_size: int = 1024,
     tiktoken_model: str = "gpt-4o",
 ) -> list[dict[str, Any]]:
+    import torch
+    from sentence_transformers import SentenceTransformer
+    from chonkie import SentenceTransformerEmbeddings
+    
+    _model = SentenceTransformer(
+        "jinaai/jina-embeddings-v3",
+        trust_remote_code=True,
+        model_kwargs={"torch_dtype": torch.float16},  # or torch.float32
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
+
+    model = SentenceTransformerEmbeddings(_model)
     late_chunker = LateChunker(
-        embedding_model="jinaai/jina-embeddings-v3",
+        embedding_model=model,
         mode = "sentence",
         chunk_size=512,
         min_sentences_per_chunk=1,
@@ -62,12 +74,12 @@ def chunking_by_late_chunk(
     )
     results: list[dict[str, Any]] = []
     late_chunks = late_chunker(content)
-    for chunk in late_chunks:
+    for idx, chunk in enumerate(late_chunks):
         results.append(
             {
                 "tokens": chunk.token_count,
                 "content": chunk.text.strip(),
-                "chunk_order_index": chunk.chunk_order_index,
+                "chunk_order_index": idx,
             }
         )
     return results
@@ -89,12 +101,12 @@ def chunking_by_semantic_chunk(
     )
     semantic_chunks = chunker_semantic(content)
     results: list[dict[str, Any]] = []
-    for chunk in semantic_chunks:
+    for idx, chunk in enumerate(semantic_chunks):
         results.append(
             {
                 "tokens": chunk.token_count,
                 "content": chunk.text.strip(),
-                "chunk_order_index": chunk.chunk_order_index,
+                "chunk_order_index": idx,
             }
         )
     return results

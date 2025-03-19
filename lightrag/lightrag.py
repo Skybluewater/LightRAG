@@ -810,6 +810,8 @@ class LightRAG:
                     }
                 )
                 # Cleaning history_messages without breaking it as a shared list object
+                if "history_messages" not in pipeline_status:
+                    pipeline_status["history_messages"] = []
                 del pipeline_status["history_messages"][:]
             else:
                 # Another process is busy, just set request flag and return
